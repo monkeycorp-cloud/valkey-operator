@@ -1,0 +1,192 @@
+---
+# loadgen-phpfpm — simulates PHP-FPM worker behaviour under rolling updates.
+#
+# Key differences from the shell loadgen:
+#   - N persistent RedisCluster connections (one per worker thread)
+#   - Slot map cached in memory, refreshed only on MOVED/ASK
+#   - Automatic retry on MOVED/ASK (transparent, like phpredis)
+#   - Reconnect on connection reset (like PHP-FPM persistent connections)
+#   - Workers run in parallel threads, simulating concurrent FPM workers
+#
+# Deploy:
+#   kubectl apply -f config/samples/loadgen-phpfpm.yaml
+#
+# Watch output:
+#   kubectl logs -f loadgen-phpfpm
+apiVersion: v1
+kind: Pod
+metadata:
+  name: loadgen-phpfpm
+  namespace: default
+  labels:
+    app: valkey-loadgen-phpfpm
+spec:
+  restartPolicy: Always
+  containers:
+    - name: loadgen
+      image: python:3.12-slim
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: APP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: valkey-app-readwrite-secret
+              key: password
+        - name: VALKEY_PORT
+          value: "6379"
+        - name: VALKEY_SEEDS
+          value: "valkey-sample-0.valkey-sample-internal.default.svc.cluster.local valkey-sample-1.valkey-sample-internal.default.svc.cluster.local valkey-sample-2.valkey-sample-internal.default.svc.cluster.local"
+        - name: NUM_WORKERS
+          value: "10"
+        - name: OP_INTERVAL_MS
+          value: "100"
+      command:
+        - sh
+        - -c
+        - |
+          pip install redis --quiet
+          python3 - <<'PYEOF'
+          import os, time, threading, random, redis
+          from redis.cluster import RedisCluster
+          from redis.exceptions import (
+              ConnectionError, TimeoutError, ResponseError,
+              ClusterDownError, RedisClusterException
+          )
+
+          SEEDS      = os.environ["VALKEY_SEEDS"].split()
+          PORT       = int(os.environ["VALKEY_PORT"])
+          PASSWORD   = os.environ["APP_PASSWORD"]
+          NUM_W      = int(os.environ["NUM_WORKERS"])
+          INTERVAL   = int(os.environ["OP_INTERVAL_MS"]) / 1000.0
+
+          # Global counters — protected by a lock.
+          lock    = threading.Lock()
+          ok      = 0
+          err     = 0
+          last_errors = []   # (ts, op, key, msg)
+
+          def make_client():
+              """Create a RedisCluster client — one per worker, kept alive."""
+              startup_nodes = [
+                  redis.cluster.ClusterNode(host=s, port=PORT) for s in SEEDS
+              ]
+              return RedisCluster(
+                  startup_nodes=startup_nodes,
+                  password=PASSWORD,
+                  username="app-readwrite",
+                  decode_responses=True,
+                  # Slot map is refreshed automatically on MOVED/ASK — same as phpredis.
+                  # skip_full_coverage_check avoids issues during partial cluster states.
+                  skip_full_coverage_check=True,
+                  socket_connect_timeout=2,
+                  socket_timeout=2,
+                  retry_on_timeout=True,
+                  # Max retries on MOVED/ASK/connection errors before surfacing the error.
+                  # phpredis default is 3 retries.
+                  retry=redis.retry.Retry(redis.backoff.ExponentialBackoff(), 3),
+                  cluster_error_retry_attempts=3,
+              )
+
+          def worker(worker_id):
+              global ok, err
+              client = None
+              consecutive_errors = 0
+
+              while True:
+                  # Reconnect if client is gone or after too many consecutive errors.
+                  if client is None or consecutive_errors >= 5:
+                      try:
+                          if client:
+                              try: client.close()
+                              except Exception: pass
+                          client = make_client()
+                          consecutive_errors = 0
+                      except Exception as e:
+                          with lock:
+                              err += 1
+                              last_errors.append((time.time(), "CONNECT", "-", str(e)[:80]))
+                          time.sleep(1)
+                          continue
+
+                  ts   = int(time.time() * 1000)
+                  key  = f"bench:{ts}"
+                  prev = f"bench:{ts - 1000}"
+
+                  # SET
+                  try:
+                      client.set(key, str(ts), ex=300)
+                      with lock:
+                          ok += 1
+                      consecutive_errors = 0
+                  except (ConnectionError, TimeoutError, ClusterDownError,
+                          RedisClusterException) as e:
+                      with lock:
+                          err += 1
+                          last_errors.append((time.time(), "SET", key, str(e)[:80]))
+                      consecutive_errors += 1
+                      # Force reconnect on connection-level errors.
+                      client = None
+                  except ResponseError as e:
+                      with lock:
+                          err += 1
+                          last_errors.append((time.time(), "SET", key, str(e)[:80]))
+                      consecutive_errors += 1
+
+                  # GET
+                  try:
+                      client.get(prev)
+                      with lock:
+                          ok += 1
+                      consecutive_errors = 0
+                  except (ConnectionError, TimeoutError, ClusterDownError,
+                          RedisClusterException) as e:
+                      with lock:
+                          err += 1
+                          last_errors.append((time.time(), "GET", prev, str(e)[:80]))
+                      consecutive_errors += 1
+                      client = None
+                  except ResponseError as e:
+                      with lock:
+                          err += 1
+                          last_errors.append((time.time(), "GET", prev, str(e)[:80]))
+                      consecutive_errors += 1
+
+                  time.sleep(INTERVAL)
+
+          def reporter():
+              """Prints stats every 5s and flushes recent errors."""
+              global last_errors
+              while True:
+                  time.sleep(5)
+                  with lock:
+                      total = ok + err
+                      snapshot_ok  = ok
+                      snapshot_err = err
+                      errors = last_errors[:]
+                      last_errors = []
+                  print(f"--- stats: ok={snapshot_ok} err={snapshot_err} total={total} ---",
+                        flush=True)
+                  for ts, op, key, msg in errors:
+                      t = time.strftime("%H:%M:%S", time.localtime(ts))
+                      print(f"[ERR] {t}  {op} {key}  {msg}", flush=True)
+
+          print(f"=== loadgen-phpfpm started — {NUM_W} workers, "
+                f"{int(INTERVAL*1000)}ms interval ===", flush=True)
+
+          threads = []
+          for i in range(NUM_W):
+              t = threading.Thread(target=worker, args=(i,), daemon=True)
+              t.start()
+              threads.append(t)
+              # Stagger worker startup slightly to avoid thundering herd.
+              time.sleep(0.05)
+
+          reporter()
+          PYEOF
+      resources:
+        requests:
+          cpu: 100m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 128Mi

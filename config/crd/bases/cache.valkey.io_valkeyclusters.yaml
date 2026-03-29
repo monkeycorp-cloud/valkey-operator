@@ -1,0 +1,667 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: valkeyclusters.cache.valkey.io
+spec:
+  group: cache.valkey.io
+  names:
+    categories:
+    - valkey
+    kind: ValkeyCluster
+    listKind: ValkeyClusterList
+    plural: valkeyclusters
+    shortNames:
+    - vc
+    - vk
+    singular: valkeycluster
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
+    - jsonPath: .status.clusterState
+      name: Cluster
+      type: string
+    - jsonPath: .status.slotsOk
+      name: Slots
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=="RollingUpdate")].message
+      name: Update
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ValkeyCluster is the Schema for the valkeyclusters API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ValkeyClusterSpec defines the desired state of ValkeyCluster.
+            properties:
+              aclUsers:
+                description: |-
+                  ACLUsers defines additional Valkey ACL accounts for application clients.
+                  The default account is disabled — applications must use one of these named accounts.
+                items:
+                  description: ValkeyACLUser defines a named ACL account for application
+                    clients.
+                  properties:
+                    commands:
+                      default: +@all
+                      description: |-
+                        Commands is the ACL command permission string (e.g. "+@read", "+@write -@dangerous").
+                        Defaults to "+@all" (all commands).
+                      type: string
+                    keyPatterns:
+                      default:
+                      - ~*
+                      description: |-
+                        KeyPatterns is a list of key patterns this user can access (e.g. "~*", "~app:*").
+                        Defaults to "~*" (all keys).
+                      items:
+                        type: string
+                      type: array
+                    name:
+                      description: Name is the Valkey ACL username.
+                      minLength: 1
+                      type: string
+                    passwordSecret:
+                      description: PasswordSecret references the Secret key containing
+                        this user's password.
+                      properties:
+                        key:
+                          description: The key of the secret to select from.  Must
+                            be a valid secret key.
+                          type: string
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                        optional:
+                          description: Specify whether the Secret or its key must
+                            be defined
+                          type: boolean
+                      required:
+                      - key
+                      type: object
+                      x-kubernetes-map-type: atomic
+                  required:
+                  - name
+                  - passwordSecret
+                  type: object
+                type: array
+              clusterNodeTimeout:
+                default: 2000
+                description: |-
+                  ClusterNodeTimeout is the maximum time in milliseconds that a Valkey Cluster
+                  node can be unavailable before it is considered failing.
+                format: int32
+                minimum: 500
+                type: integer
+              config:
+                description: |-
+                  Config defines structured Valkey configuration parameters.
+                  These are merged with CustomConfig, with structured values taking precedence.
+                properties:
+                  hz:
+                    default: 10
+                    description: |-
+                      Hz is the Valkey scheduler frequency (background tasks per second).
+                      Higher values reduce latency but increase CPU usage.
+                    format: int32
+                    maximum: 500
+                    minimum: 1
+                    type: integer
+                  ioThreads:
+                    description: |-
+                      IOThreads overrides the automatic io-threads calculation.
+                      When not set, io-threads is derived from resources.limits.cpu:
+                        < 4 CPUs → 1 (disabled), 4 CPUs → 2, 8 CPUs → 4, 16+ CPUs → 8.
+                      Set to 1 to disable io-threads explicitly.
+                    format: int32
+                    maximum: 8
+                    minimum: 1
+                    type: integer
+                  lazyfree:
+                    default: true
+                    description: |-
+                      Lazyfree enables lazy (background thread) deletion for evictions,
+                      expirations and key flushing — avoids latency spikes on large keys.
+                    type: boolean
+                  maxmemoryPolicy:
+                    default: allkeys-lru
+                    description: |-
+                      MaxmemoryPolicy defines the eviction policy when maxmemory is reached.
+                      Common values: allkeys-lru, volatile-lru, allkeys-lfu, noeviction.
+                    type: string
+                  maxmemoryRatio:
+                    default: 80
+                    description: |-
+                      MaxmemoryRatio is the percentage of the pod memory limit allocated to Valkey.
+                      maxmemory = resources.limits.memory * MaxmemoryRatio / 100.
+                      If no memory limit is set, maxmemory is not configured (Valkey default).
+                    format: int32
+                    maximum: 99
+                    minimum: 10
+                    type: integer
+                  tcpKeepalive:
+                    default: 300
+                    description: |-
+                      TCPKeepalive is the interval in seconds for TCP keepalive probes.
+                      Important for PHP persistent connections.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              customConfig:
+                description: |-
+                  CustomConfig contains additional raw Valkey configuration lines
+                  appended to the generated valkey.conf.
+                type: string
+              image:
+                default: ghcr.io/geoffrey/valkey-operator-server:9.0.3-trixie
+                description: |-
+                  Image is the container image for Valkey.
+                  Must be built from module/Dockerfile — the operator module is required.
+                type: string
+              metrics:
+                description: Metrics configures the redis_exporter sidecar for Prometheus
+                  scraping.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enabled controls whether the redis_exporter sidecar
+                      is injected.
+                    type: boolean
+                  image:
+                    default: oliver006/redis_exporter:latest
+                    description: Image is the redis_exporter container image.
+                    type: string
+                  metricsSecret:
+                    description: |-
+                      MetricsSecret references a Secret containing the password for the
+                      dedicated metrics ACL user. The Secret must contain a key "password".
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  serviceMonitor:
+                    description: ServiceMonitor configures the Prometheus Operator
+                      ServiceMonitor resource.
+                    properties:
+                      enabled:
+                        default: true
+                        description: Enabled controls whether the ServiceMonitor is
+                          created.
+                        type: boolean
+                      interval:
+                        description: |-
+                          Interval is the Prometheus scrape interval (e.g. "30s").
+                          Defaults to the Prometheus global scrape interval if empty.
+                        type: string
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          Labels are added to the ServiceMonitor metadata so that the Prometheus
+                          Operator can discover it via its serviceMonitorSelector.
+                          Example: {"release": "kube-prometheus-stack"}
+                        type: object
+                      scrapeTimeout:
+                        description: |-
+                          ScrapeTimeout is the Prometheus scrape timeout (e.g. "10s").
+                          Must be less than or equal to Interval.
+                        type: string
+                    required:
+                    - enabled
+                    type: object
+                required:
+                - enabled
+                - metricsSecret
+                type: object
+              operatorSecret:
+                description: |-
+                  OperatorSecret references a Secret containing the password for the internal
+                  operator account. This account has full privileges and is used exclusively
+                  by the operator for cluster management (CLUSTER MEET, CLUSTER FAILOVER, ACL…).
+                  The Secret must contain a key named "password".
+                properties:
+                  key:
+                    description: The key of the secret to select from.  Must be a
+                      valid secret key.
+                    type: string
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  optional:
+                    description: Specify whether the Secret or its key must be defined
+                    type: boolean
+                required:
+                - key
+                type: object
+                x-kubernetes-map-type: atomic
+              port:
+                default: 6379
+                description: Port is the port Valkey listens on.
+                format: int32
+                maximum: 65535
+                minimum: 1
+                type: integer
+              rebalance:
+                description: Rebalance configures automatic slot rebalancing when
+                  shards become imbalanced.
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled activates automatic rebalancing when ShardImbalanced
+                      condition is raised.
+                    type: boolean
+                  maxSlotsPerRound:
+                    default: 100
+                    description: |-
+                      MaxSlotsPerRound limits how many slots valkey-cli --cluster rebalance moves
+                      per execution. Reduces rebalance impact on latency.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  threshold:
+                    default: 20
+                    description: |-
+                      Threshold is the maximum allowed memory deviation (%) between the most and
+                      least loaded shard before ShardImbalanced is raised.
+                    format: int32
+                    maximum: 100
+                    minimum: 5
+                    type: integer
+                required:
+                - enabled
+                type: object
+              replicasPerShard:
+                default: 1
+                description: ReplicasPerShard is the number of replica pods per primary
+                  shard.
+                format: int32
+                minimum: 0
+                type: integer
+              resources:
+                description: Resources defines the resource requirements for each
+                  Valkey pod.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              shards:
+                default: 3
+                description: |-
+                  Shards is the number of primary shards. Each shard owns a portion of the
+                  16384 hash slots. Total pods = Shards * (1 + ReplicasPerShard).
+                format: int32
+                minimum: 1
+                type: integer
+              storage:
+                description: Storage defines the persistent volume configuration.
+                properties:
+                  size:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 10Gi
+                    description: Size is the capacity of each PVC.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  storageClassName:
+                    description: StorageClassName for PVCs. Empty means the cluster
+                      default.
+                    type: string
+                type: object
+              terminationGracePeriodSeconds:
+                default: 60
+                description: |-
+                  TerminationGracePeriodSeconds is the time allowed for a pod to shut down
+                  gracefully. Must be long enough to cover pro-active cluster failover.
+                format: int64
+                minimum: 10
+                type: integer
+              topology:
+                description: Topology defines topology-aware placement and election
+                  rules.
+                properties:
+                  avoidSameZoneAsFailed:
+                    default: true
+                    description: |-
+                      AvoidSameZoneAsFailed instructs the election algorithm to deprioritise
+                      replicas that are in the same topology domain as the failing primary.
+                    type: boolean
+                  electionTopologyWeight:
+                    default: 70
+                    description: |-
+                      ElectionTopologyWeight controls how much topology preference influences
+                      replica selection during pro-active failover, relative to replication lag.
+                      Range 0–100: 0=lag only, 100=topology only, 70=balanced.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  nodeSpreadPolicy:
+                    default: Hard
+                    description: |-
+                      NodeSpreadPolicy controls isolation at the node level (kubernetes.io/hostname).
+                        Hard — at most 1 pod per node; pods go Pending if nodes are insufficient.
+                        Soft — prefer 1 pod per node; co-location allowed when nodes are scarce.
+                        None — no node-level constraint; multiple pods may share a node.
+                    enum:
+                    - Hard
+                    - Soft
+                    - None
+                    type: string
+                  nodeTopologyKey:
+                    default: topology.kubernetes.io/zone
+                    description: |-
+                      NodeTopologyKey is the node label key used to identify topology domains.
+                      Common values:
+                        "topology.kubernetes.io/zone"    — availability zone
+                        "topology.kubernetes.io/region"  — cloud region
+                        "kubernetes.io/hostname"         — individual node
+                    type: string
+                  podAssignments:
+                    description: |-
+                      PodAssignments declares which topology domain value is preferred for each
+                      pod ordinal.
+                    items:
+                      description: |-
+                        TopologyPodAssignment declares the preferred topology domain for a given
+                        StatefulSet pod ordinal.
+                      properties:
+                        podIndex:
+                          description: PodIndex is the StatefulSet ordinal.
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        preferredValues:
+                          description: PreferredValues is an ordered list of topology
+                            domain values preferred for this pod.
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                      required:
+                      - podIndex
+                      - preferredValues
+                      type: object
+                    type: array
+                  zoneSpreadPolicy:
+                    default: Hard
+                    description: |-
+                      ZoneSpreadPolicy controls isolation at the zone level (nodeTopologyKey).
+                        Hard — at most 1 pod per zone; pods go Pending if zones are insufficient.
+                        Soft — prefer 1 pod per zone; co-location allowed when zones are scarce.
+                        None — no zone-level constraint; multiple pods may share a zone.
+                    enum:
+                    - Hard
+                    - Soft
+                    - None
+                    type: string
+                type: object
+            required:
+            - image
+            - operatorSecret
+            - replicasPerShard
+            - shards
+            type: object
+          status:
+            description: ValkeyClusterStatus defines the observed state of ValkeyCluster.
+            properties:
+              clusterState:
+                description: ClusterState is the value of cluster_state from CLUSTER
+                  INFO ("ok" or "fail").
+                type: string
+              conditions:
+                description: Conditions represents the latest available observations
+                  of the cluster's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              nodes:
+                description: |-
+                  Nodes holds the observed topology of every cluster node, populated from
+                  CLUSTER NODES on each reconcile. Used by the operator for scaling decisions.
+                items:
+                  description: ValkeyNodeStatus holds the observed state of a single
+                    Valkey cluster node.
+                  properties:
+                    ip:
+                      description: IP is the announced IP address of the node (from
+                        cluster-announce-ip).
+                      type: string
+                    masterId:
+                      description: |-
+                        MasterID is the node ID of the primary this replica replicates from.
+                        Empty for primary nodes.
+                      type: string
+                    nodeId:
+                      description: NodeID is the unique Valkey cluster node identifier.
+                      type: string
+                    podName:
+                      description: PodName is the Kubernetes pod name hosting this
+                        node.
+                      type: string
+                    role:
+                      description: 'Role is the current role: "primary" or "replica".'
+                      type: string
+                    slots:
+                      description: |-
+                        Slots is the slot range owned by this node (e.g. "0-5460").
+                        Empty for replica nodes.
+                      type: string
+                  required:
+                  - ip
+                  - nodeId
+                  - podName
+                  - role
+                  type: object
+                type: array
+              nodesOk:
+                description: NodesOk is the count of nodes reachable and healthy in
+                  the cluster.
+                format: int32
+                type: integer
+              observedGeneration:
+                description: ObservedGeneration reflects the generation of the most
+                  recently reconciled spec.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the current lifecycle phase of the cluster.
+                type: string
+              podRoles:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodRoles maps pod name to its current role ("primary" or "replica").
+                  Derived from CLUSTER NODES and kept in sync each reconcile loop.
+                type: object
+              podTopology:
+                additionalProperties:
+                  type: string
+                description: PodTopology maps pod name to its observed topology domain
+                  value.
+                type: object
+              primaryTopologyValue:
+                description: PrimaryTopologyValue is the topology domain value of
+                  the primary of shard 0.
+                type: string
+              readyReplicas:
+                description: ReadyReplicas is the number of pods ready to serve requests.
+                format: int32
+                type: integer
+              slotsOk:
+                description: SlotsOk is the number of hash slots in ok state (out
+                  of 16384).
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

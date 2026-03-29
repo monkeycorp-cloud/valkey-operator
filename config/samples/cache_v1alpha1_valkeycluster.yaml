@@ -1,0 +1,108 @@
+apiVersion: cache.valkey.io/v1alpha1
+kind: ValkeyCluster
+metadata:
+  name: valkey-sample
+  namespace: default
+spec:
+  shards: 3
+  replicasPerShard: 1
+  # Custom image with the operator module embedded (see module/Dockerfile).
+  # For kind: docker build -t valkey-operator-server:dev ./module
+  #           kind load docker-image valkey-operator-server:dev --name valkey-dev
+  image: valkey-operator-server:dev
+  port: 6379
+  storage:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  clusterNodeTimeout: 5000
+  terminationGracePeriodSeconds: 60
+
+  config:
+    # maxmemory = resources.limits.memory * maxmemoryRatio / 100
+    # Default: 80. Unset if no memory limit is configured.
+    maxmemoryRatio: 80
+    # allkeys-lru, volatile-lru, allkeys-lfu, volatile-lfu, noeviction, etc.
+    maxmemoryPolicy: "allkeys-lru"
+    # Background task frequency. Higher = lower latency, more CPU.
+    hz: 15
+    # Lazy (background) deletion for evictions, expirations, flushes.
+    lazyfree: true
+    # TCP keepalive interval in seconds. Important for PHP persistent connections.
+    tcpKeepalive: 300
+    # io-threads override. When unset, auto-calculated from resources.limits.cpu:
+    #   < 4 CPUs → disabled, 4 → 2, 8 → 4, 16+ → 8.
+    # ioThreads: 4
+
+  # operatorSecret references a Secret with a "password" key used exclusively
+  # by the operator for internal cluster management (CLUSTER MEET, FAILOVER, ACL…).
+  # kubectl create secret generic valkey-operator-secret --from-literal=password=devpassword
+  operatorSecret:
+    name: valkey-operator-secret
+    key: password
+
+  # aclUsers defines named accounts for application clients.
+  # The default account is disabled — clients must use one of these.
+  # kubectl create secret generic valkey-app-readwrite-secret --from-literal=password=devpassword
+  aclUsers:
+    - name: app-readwrite
+      passwordSecret:
+        name: valkey-app-readwrite-secret
+        key: password
+      keyPatterns:
+        - "~*"
+      # The following @dangerous commands are required by Redis/Valkey cluster
+      # client libraries (redis-py, phpredis) at connection init:
+      #   command         — redis-py v7+ introspects supported commands on connect
+      #   cluster|slots   — slot map discovery (redis-py, phpredis)
+      #   cluster|shards  — slot map discovery (redis-py v4+ cluster mode)
+      commands: "+@read +@write -@dangerous +command +cluster|slots +cluster|shards"
+
+  # topology defines zone-aware pod placement and topology-aware election.
+  # Requires a kind cluster with 3 workers labelled with topology.kubernetes.io/zone.
+  # Set nodeSpreadPolicy/zoneSpreadPolicy to None for single-node dev clusters.
+  topology:
+    nodeTopologyKey: "topology.kubernetes.io/zone"
+    nodeSpreadPolicy: Hard
+    zoneSpreadPolicy: Soft
+    avoidSameZoneAsFailed: true
+    electionTopologyWeight: 70
+    podAssignments:
+      - podIndex: 0
+        preferredValues: ["zone-a"]
+      - podIndex: 1
+        preferredValues: ["zone-b"]
+      - podIndex: 2
+        preferredValues: ["zone-c"]
+
+  # metrics: requires the redis_exporter image and a dedicated secret.
+  # kubectl create secret generic valkey-metrics-secret --from-literal=password=devpassword
+  # metrics:
+  #   enabled: true
+  #   image: "oliver006/redis_exporter:latest"
+  #   metricsSecret:
+  #     name: valkey-metrics-secret
+  #     key: password
+  #   serviceMonitor:               # requires Prometheus Operator
+  #     enabled: true
+  #     labels:
+  #       release: kube-prometheus-stack
+  #     interval: "30s"
+  #     scrapeTimeout: "10s"
+
+  # rebalance: automatic slot rebalancing when shards are imbalanced.
+  # rebalance:
+  #   enabled: true
+  #   threshold: 20       # % memory deviation between most/least loaded shard
+  #   maxSlotsPerRound: 100
+
+  # customConfig: raw valkey.conf lines appended last (override anything above).
+  # customConfig: |
+  #   slowlog-log-slower-than 10000
+  #   slowlog-max-len 128

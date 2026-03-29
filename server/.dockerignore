@@ -1,0 +1,3 @@
+# Exclude the locally compiled .so — wrong architecture on macOS (darwin/arm64).
+# The builder stage recompiles for linux/amd64 inside the container.
+*.so

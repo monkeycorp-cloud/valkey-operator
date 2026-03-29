@@ -1,0 +1,30 @@
+# Valkey operator module — Linux ELF, compiled inside Docker.
+# Build with: make docker-build-server
+server/valkey-operator-module.so
+
+# Go build output
+bin/
+
+# Test coverage
+cover.out
+*.out
+
+# macOS metadata
+.DS_Store
+
+# JetBrains
+.idea/
+
+# VS Code
+.vscode/
+
+# kubebuilder / controller-gen local tooling
+testbin/
+hack/tools/
+
+# Kustomize build output
+config/manager/kustomization.yaml
+
+# Environment / secrets
+.env
+*.env
