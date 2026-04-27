@@ -1,3 +1,18 @@
+// Copyright 2026 Gorilla-Ops contributors
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package controller
 
 import (
@@ -373,13 +388,19 @@ func detectUnderReplicatedShards(nodes []clusterNodeState, expectedReplicas int)
 func (r *ValkeyClusterReconciler) forgetStaleNodes(ctx context.Context, vc *cachev1alpha1.ValkeyCluster, nodes []clusterNodeState, creds aclCredentials) error {
 	logger := log.FromContext(ctx)
 
-	// Guard 1: skip during rolling updates — a pod being replaced looks stale
-	// (fail + unknown IP) but is just restarting. Forgetting it would force a
-	// full re-MEET/re-REPLICATE once it comes back.
+	// Guard 1: skip during rolling updates or scale operations — a pod being
+	// replaced or removed looks stale (fail + unknown IP) but may be
+	// restarting or waiting for the new desired replica count to converge.
+	// Forgetting it would force a full re-MEET/re-REPLICATE once it comes back.
 	sts := &appsv1.StatefulSet{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: statefulSetName(vc), Namespace: vc.Namespace}, sts); err == nil {
 		if sts.Status.CurrentRevision != sts.Status.UpdateRevision {
 			logger.Info("Rolling update in progress — skipping CLUSTER FORGET")
+			return nil
+		}
+		if sts.Status.Replicas != totalPods(vc) {
+			logger.Info("Scale operation in progress — skipping CLUSTER FORGET",
+				"currentReplicas", sts.Status.Replicas, "expectedReplicas", totalPods(vc))
 			return nil
 		}
 	}

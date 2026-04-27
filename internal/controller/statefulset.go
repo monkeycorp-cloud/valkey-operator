@@ -1,3 +1,18 @@
+// Copyright 2026 Gorilla-Ops contributors
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package controller
 
 import (
@@ -204,7 +219,8 @@ for i in $(seq 1 $SAFE_MAX_WAIT); do
   sleep 1
 done
 
-# Phase 2: Check local role — replicas have nothing to hand off.
+# Phase 2: Check local role — replicas already waited for CLUSTER.SAFE above,
+# so the cluster can absorb their departure. No failover needed.
 ROLE=$($CLI INFO replication 2>/dev/null | grep "^role:" | cut -d: -f2 | tr -d '\r')
 echo "PreStop: role=$ROLE"
 if [ "$ROLE" != "master" ]; then

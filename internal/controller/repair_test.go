@@ -1,3 +1,18 @@
+// Copyright 2026 Gorilla-Ops contributors
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package controller
 
 import (
@@ -145,6 +160,19 @@ func TestBuildKnownAddrSets(t *testing.T) {
 		ips, _ := buildKnownAddrSets("txt:" + clusterNodesFixture)
 		if len(ips) != 6 {
 			t.Fatalf("verbatim prefix should be stripped, got %d IPs", len(ips))
+		}
+	})
+
+	t.Run("NoaddrNodeExcluded", func(t *testing.T) {
+		raw := clusterNodesFixture +
+			"9999999999999999999999999999999999999999 10.0.0.99:6379@16379 master,fail,noaddr - 0 0 7 connected\n"
+		ips, _ := buildKnownAddrSets(raw)
+		if _, ok := ips["10.0.0.99"]; ok {
+			t.Fatal("noaddr node IP should be excluded from known set")
+		}
+		// Original 6 nodes should still be present.
+		if len(ips) != 6 {
+			t.Fatalf("expected 6 IPs (noaddr excluded), got %d", len(ips))
 		}
 	})
 }

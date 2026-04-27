@@ -1,3 +1,18 @@
+// Copyright 2026 Gorilla-Ops contributors
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package controller
 
 import (
@@ -108,6 +123,16 @@ const (
 	// Used by both the bootstrap and gossip recovery paths to measure how long
 	// the cluster has been degraded. Cleared when cluster_state returns to ok.
 	annotationClusterNotOKSince = "valkey.io/cluster-not-ok-since"
+
+	// annotationLastResetTime records when the last CLUSTER RESET SOFT was
+	// issued. Used as a cooldown to prevent repeated resets every
+	// convergenceTimeout cycle if the cluster stays in fail state.
+	annotationLastResetTime = "valkey.io/last-reset-time"
+
+	// resetCooldown is the minimum interval between two CLUSTER RESET SOFT
+	// operations. Gives the cluster time to reform after a reset before
+	// attempting another one.
+	resetCooldown = 5 * time.Minute
 )
 
 // reconcileBootstrapJob drives the bootstrap state machine entirely from Go.
@@ -292,19 +317,22 @@ func (r *ValkeyClusterReconciler) clusterNotOKTimedOut(ctx context.Context, vc *
 	return time.Since(t) >= convergenceTimeoutFor(vc)
 }
 
-// clearClusterNotOKAnnotation removes the cluster-not-ok-since annotation.
-// Called when cluster_state returns to ok.
+// clearClusterNotOKAnnotation removes the cluster-not-ok-since and
+// last-reset-time annotations. Called when cluster_state returns to ok.
 func (r *ValkeyClusterReconciler) clearClusterNotOKAnnotation(ctx context.Context, vc *cachev1alpha1.ValkeyCluster) {
 	if vc.Annotations == nil {
 		return
 	}
-	if _, ok := vc.Annotations[annotationClusterNotOKSince]; !ok {
+	_, hasNotOK := vc.Annotations[annotationClusterNotOKSince]
+	_, hasReset := vc.Annotations[annotationLastResetTime]
+	if !hasNotOK && !hasReset {
 		return
 	}
 	patch := client.MergeFrom(vc.DeepCopy())
 	delete(vc.Annotations, annotationClusterNotOKSince)
+	delete(vc.Annotations, annotationLastResetTime)
 	if err := r.Client.Patch(ctx, vc, patch); err != nil {
-		log.FromContext(ctx).Error(err, "Failed to clear cluster-not-ok-since annotation")
+		log.FromContext(ctx).Error(err, "Failed to clear cluster recovery annotations")
 	}
 }
 
@@ -421,8 +449,20 @@ func (r *ValkeyClusterReconciler) allNodesBootstrapReady(
 // while preserving data in dump.rdb, so --cluster create can form a clean cluster
 // even when pods hold stale nodes.conf from a previous cluster incarnation.
 // Pods that cannot be reached are skipped — they will be reset on a later attempt.
+// A cooldown annotation prevents repeated resets if the cluster stays in fail state.
 func (r *ValkeyClusterReconciler) resetAllNodes(ctx context.Context, vc *cachev1alpha1.ValkeyCluster, pods []*corev1.Pod, creds aclCredentials) error {
 	logger := log.FromContext(ctx)
+
+	// Cooldown: skip if a reset was issued recently.
+	if vc.Annotations != nil {
+		if lastStr, ok := vc.Annotations[annotationLastResetTime]; ok {
+			if last, err := time.Parse(time.RFC3339, lastStr); err == nil && time.Since(last) < resetCooldown {
+				logger.Info("CLUSTER RESET SOFT skipped — cooldown active",
+					"lastReset", lastStr, "cooldown", resetCooldown)
+				return nil
+			}
+		}
+	}
 
 	for _, pod := range pods {
 		addr := fmt.Sprintf("%s:%d", pod.Status.PodIP, effectivePort(vc))
@@ -443,6 +483,17 @@ func (r *ValkeyClusterReconciler) resetAllNodes(ctx context.Context, vc *cachev1
 			}
 		}()
 	}
+
+	// Record reset timestamp for cooldown.
+	if vc.Annotations == nil {
+		vc.Annotations = make(map[string]string)
+	}
+	patch := client.MergeFrom(vc.DeepCopy())
+	vc.Annotations[annotationLastResetTime] = time.Now().UTC().Format(time.RFC3339)
+	if err := r.Client.Patch(ctx, vc, patch); err != nil {
+		logger.Info("Failed to record reset timestamp", "err", err)
+	}
+
 	return nil
 }
 

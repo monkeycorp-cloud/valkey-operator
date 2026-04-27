@@ -1,3 +1,18 @@
+// Copyright 2026 Gorilla-Ops contributors
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package controller
 
 import (
@@ -70,9 +85,10 @@ func shouldSkipACLPod(hashChanged bool, startTime *metav1.Time) bool {
 
 // aclHash returns an 8-byte hex digest of the resolved ACL configuration.
 // Same pattern as configMapHash in statefulset.go.
-func aclHash(operatorPassword, metricsPassword string, users []resolvedACLUser) string {
+func aclHash(operatorPassword, metricsPassword string, metricsEnabled bool, users []resolvedACLUser) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "operator=%s\n", operatorPassword)
+	fmt.Fprintf(&b, "metricsEnabled=%t\n", metricsEnabled)
 	fmt.Fprintf(&b, "metrics=%s\n", metricsPassword)
 	for _, u := range users {
 		fmt.Fprintf(&b, "user=%s pass=%s keys=%v cmds=%s\n",
@@ -117,7 +133,8 @@ func (r *ValkeyClusterReconciler) reconcileACLs(ctx context.Context, vc *cachev1
 		}
 	}
 
-	hash := aclHash(operatorPassword, metricsPassword, appUsers)
+	metricsEnabled := vc.Spec.Metrics != nil && vc.Spec.Metrics.Enabled
+	hash := aclHash(operatorPassword, metricsPassword, metricsEnabled, appUsers)
 	hashChanged := vc.Annotations[aclHashAnnotation] != hash
 
 	podList := &corev1.PodList{}
@@ -306,10 +323,21 @@ type resolvedACLUser struct {
 	commands    string
 }
 
+// validACLKeyPattern checks that a key pattern starts with "~" or "%"
+// (read/write channel prefixes like "%R~" are also valid).
+func validACLKeyPattern(p string) bool {
+	return strings.HasPrefix(p, "~") || strings.HasPrefix(p, "%")
+}
+
 // resolveACLUsers fetches all application user passwords from their Secrets.
 func (r *ValkeyClusterReconciler) resolveACLUsers(ctx context.Context, vc *cachev1alpha1.ValkeyCluster) ([]resolvedACLUser, error) {
 	users := make([]resolvedACLUser, 0, len(vc.Spec.ACLUsers))
 	for _, u := range vc.Spec.ACLUsers {
+		for _, kp := range u.KeyPatterns {
+			if !validACLKeyPattern(kp) {
+				return nil, fmt.Errorf("ACL user %q: invalid key pattern %q (must start with ~ or %%)", u.Name, kp)
+			}
+		}
 		password, err := r.resolveSecretKey(ctx, vc.Namespace, u.PasswordSecret)
 		if err != nil {
 			return nil, fmt.Errorf("resolving password for ACL user %q: %w", u.Name, err)

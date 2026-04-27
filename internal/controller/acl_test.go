@@ -1,3 +1,18 @@
+// Copyright 2026 Gorilla-Ops contributors
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package controller
 
 import (
@@ -17,29 +32,35 @@ func TestAclHash(t *testing.T) {
 	base := []resolvedACLUser{user("app", "pass1", []string{"~*"}, "+@read")}
 
 	t.Run("SameInputsSameHash", func(t *testing.T) {
-		h1 := aclHash("op", "met", base)
-		h2 := aclHash("op", "met", base)
+		h1 := aclHash("op", "met", true, base)
+		h2 := aclHash("op", "met", true, base)
 		if h1 != h2 {
 			t.Fatalf("expected identical hashes, got %q and %q", h1, h2)
 		}
 	})
 
 	t.Run("DifferentOperatorPassword", func(t *testing.T) {
-		if aclHash("op1", "met", base) == aclHash("op2", "met", base) {
+		if aclHash("op1", "met", true, base) == aclHash("op2", "met", true, base) {
 			t.Fatal("expected different hashes for different operator passwords")
 		}
 	})
 
 	t.Run("DifferentMetricsPassword", func(t *testing.T) {
-		if aclHash("op", "met1", base) == aclHash("op", "met2", base) {
+		if aclHash("op", "met1", true, base) == aclHash("op", "met2", true, base) {
 			t.Fatal("expected different hashes for different metrics passwords")
+		}
+	})
+
+	t.Run("MetricsEnabledToggle", func(t *testing.T) {
+		if aclHash("op", "met", true, base) == aclHash("op", "met", false, base) {
+			t.Fatal("expected different hashes when metricsEnabled changes")
 		}
 	})
 
 	t.Run("DifferentUserName", func(t *testing.T) {
 		u1 := []resolvedACLUser{user("alice", "p", []string{"~*"}, "+@read")}
 		u2 := []resolvedACLUser{user("bob", "p", []string{"~*"}, "+@read")}
-		if aclHash("op", "met", u1) == aclHash("op", "met", u2) {
+		if aclHash("op", "met", true, u1) == aclHash("op", "met", true, u2) {
 			t.Fatal("expected different hashes for different user names")
 		}
 	})
@@ -47,7 +68,7 @@ func TestAclHash(t *testing.T) {
 	t.Run("DifferentUserPassword", func(t *testing.T) {
 		u1 := []resolvedACLUser{user("app", "pass1", []string{"~*"}, "+@read")}
 		u2 := []resolvedACLUser{user("app", "pass2", []string{"~*"}, "+@read")}
-		if aclHash("op", "met", u1) == aclHash("op", "met", u2) {
+		if aclHash("op", "met", true, u1) == aclHash("op", "met", true, u2) {
 			t.Fatal("expected different hashes for different user passwords")
 		}
 	})
@@ -55,7 +76,7 @@ func TestAclHash(t *testing.T) {
 	t.Run("DifferentKeyPatterns", func(t *testing.T) {
 		u1 := []resolvedACLUser{user("app", "p", []string{"~*"}, "+@read")}
 		u2 := []resolvedACLUser{user("app", "p", []string{"~app:*"}, "+@read")}
-		if aclHash("op", "met", u1) == aclHash("op", "met", u2) {
+		if aclHash("op", "met", true, u1) == aclHash("op", "met", true, u2) {
 			t.Fatal("expected different hashes for different key patterns")
 		}
 	})
@@ -63,14 +84,14 @@ func TestAclHash(t *testing.T) {
 	t.Run("DifferentCommands", func(t *testing.T) {
 		u1 := []resolvedACLUser{user("app", "p", []string{"~*"}, "+@read")}
 		u2 := []resolvedACLUser{user("app", "p", []string{"~*"}, "+@write")}
-		if aclHash("op", "met", u1) == aclHash("op", "met", u2) {
+		if aclHash("op", "met", true, u1) == aclHash("op", "met", true, u2) {
 			t.Fatal("expected different hashes for different commands")
 		}
 	})
 
 	t.Run("EmptyUsersStable", func(t *testing.T) {
-		h1 := aclHash("op", "met", nil)
-		h2 := aclHash("op", "met", nil)
+		h1 := aclHash("op", "met", true, nil)
+		h2 := aclHash("op", "met", true, nil)
 		if h1 != h2 {
 			t.Fatalf("expected stable hash for empty users, got %q and %q", h1, h2)
 		}
@@ -82,20 +103,20 @@ func TestAclHash(t *testing.T) {
 	t.Run("UserOrderMatters", func(t *testing.T) {
 		u1 := []resolvedACLUser{user("alice", "pa", []string{"~*"}, "+@read"), user("bob", "pb", []string{"~*"}, "+@write")}
 		u2 := []resolvedACLUser{user("bob", "pb", []string{"~*"}, "+@write"), user("alice", "pa", []string{"~*"}, "+@read")}
-		if aclHash("op", "met", u1) == aclHash("op", "met", u2) {
+		if aclHash("op", "met", true, u1) == aclHash("op", "met", true, u2) {
 			t.Fatal("expected different hashes when user order differs")
 		}
 	})
 
 	t.Run("HashLengthIs16Chars", func(t *testing.T) {
-		h := aclHash("op", "met", base)
+		h := aclHash("op", "met", true, base)
 		if len(h) != 16 {
 			t.Fatalf("expected 16-char hash, got %d chars: %q", len(h), h)
 		}
 	})
 
 	t.Run("EmptyPasswordsDoNotPanic", func(t *testing.T) {
-		h := aclHash("", "", nil)
+		h := aclHash("", "", false, nil)
 		if len(h) != 16 {
 			t.Fatalf("expected 16-char hash, got %d chars: %q", len(h), h)
 		}
@@ -195,6 +216,35 @@ func TestShouldSkipACLPod(t *testing.T) {
 			got := shouldSkipACLPod(tc.hashChanged, tc.startTime)
 			if got != tc.want {
 				t.Fatalf("shouldSkipACLPod(%v, %v) = %v, want %v", tc.hashChanged, tc.startTime, got, tc.want)
+			}
+		})
+	}
+}
+
+// --- validACLKeyPattern ---
+
+func TestValidACLKeyPattern(t *testing.T) {
+	cases := []struct {
+		pattern string
+		valid   bool
+	}{
+		{"~*", true},
+		{"~app:*", true},
+		{"~session:*", true},
+		{"%R~app:*", true},
+		{"%W~app:*", true},
+		{"%RW~app:*", true},
+		{"invalid", false},
+		{"", false},
+		{"*", false},
+		{"app:*", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.pattern, func(t *testing.T) {
+			got := validACLKeyPattern(tc.pattern)
+			if got != tc.valid {
+				t.Fatalf("validACLKeyPattern(%q) = %v, want %v", tc.pattern, got, tc.valid)
 			}
 		})
 	}

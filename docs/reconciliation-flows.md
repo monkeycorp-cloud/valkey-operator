@@ -43,7 +43,10 @@ reconcileReplicaRoles     → gossip-recovery-done absent → no-op (guard)
   - `OPERATOR.TOPOLOGY.SET role=replica` → `CLUSTER MEET` + `CLUSTER REPLICATE`
 - `ShardUnderReplicated` condition raised after 30 s grace if not resolved
 
-**Critical guard:** `forgetStaleNodes` is skipped when any pod has a `DeletionTimestamp` (rolling update in progress) to avoid forgetting a pod that is simply restarting.
+**Critical guards:** `forgetStaleNodes` is skipped when:
+- Any pod has a `DeletionTimestamp` (eviction / manual delete)
+- A rolling update is in progress (`CurrentRevision ≠ UpdateRevision`)
+- A scale operation is in progress (`sts.Status.Replicas ≠ totalPods`)
 
 ---
 
@@ -65,7 +68,7 @@ reconcileReplicaRoles     → gossip-recovery-done absent → no-op (guard)
   2. `CLUSTER FAILOVER` sent to best replica (returns immediately, handshake begins)
   3. `OPERATOR.FAILOVER.PREPARE <timeout_ms>` — `CLIENT PAUSE WRITE` + `WAIT 1 500` + `CLIENT UNPAUSE`, executed atomically in the Valkey event loop
   4. Poll `INFO replication` until `role:slave` (up to 5 s) — ensures `nodes.conf` is saved as slave on PVC so the pod restarts as replica, not standalone master
-- PreStop hook (replica pod): no failover needed — exit immediately
+- PreStop hook (replica pod): waits for `OPERATOR.CLUSTER.SAFE`, then exits (no failover needed)
 - Pod restarts → readiness probe (`OPERATOR.NODE.READY`) blocks traffic during resync
 - `forgetStaleNodes` → **skipped** during rolling update
 - `reconcileOrphanReplicas` → **skipped** (StatefulSet unstable)
@@ -151,7 +154,7 @@ After brutal restart, each pod knows its former peers (stale `nodes.conf`) → `
 ### 2C. Accidental scale to zero (`kubectl scale sts --replicas=0`)
 
 - `isStatefulSetStable()=false` → all repair steps deferred
-- Pods terminated → `reconcileClusterHealth` → nodes `fail` → `CLUSTER FORGET` after 30 s
+- Pods terminated → `reconcileClusterHealth` → nodes `fail` → `CLUSTER FORGET` skipped while scale in progress; issued after 30 s once stable
 - On scale-up → new pods without `nodes.conf` → standalone
 - `reconcileOrphanReplicas` → normal re-integration (if quorum still available)
 - **If all primaries were forgotten** → unassigned slots → re-bootstrap triggered
@@ -172,7 +175,7 @@ After brutal restart, each pod knows its former peers (stale `nodes.conf`) → `
 
 | Flow | Guard | Interference risk |
 |------|-------|-------------------|
-| `forgetStaleNodes` | Skip if pod has `DeletionTimestamp`; skip during rolling update | Restarting pod briefly looks stale — guard is correct |
+| `forgetStaleNodes` | Skip if pod has `DeletionTimestamp`; skip during rolling update; skip during scale operation | Restarting or scaling pod briefly looks stale — guards are correct |
 | `reconcileOrphanReplicas` | `cluster_known_nodes ≤ 1` (standalone) | Does not target 2A pods (known_nodes > 1) |
 | `reconcileReplicaRoles` | `gossip-recovery-done` annotation | **Critical:** without this guard, runs on fresh clusters and causes `ERR CLUSTER REPLICATE on a node with assigned slots` |
 | `reconcileBootstrapJob` | Skipped if `alreadyFormed=true` (slots > 0) | 2A short-circuits before this path |
@@ -253,6 +256,7 @@ returns `ERR To set a master the node must be empty and without assigned slots`.
 | `valkey.io/gossip-recovery-start` | `gossipRecoveryTimedOut` | `clearGossipRecoveryAnnotation`, `resetGossipRecoveryAnnotation` | Tracks when gossip recovery started (timer) |
 | `valkey.io/gossip-recovery-done` | `clearGossipRecoveryAnnotation` (post-recovery) | `reconcileReplicaRoles` (on start, re-set on retry) | Gates `reconcileReplicaRoles` to post-recovery context only |
 | `valkey.io/stale-since` | `reconcileClusterHealth` | `reconcileClusterHealth` (node comes back) | Grace period before `CLUSTER FORGET` |
+| `valkey.io/last-reset-time` | `resetAllNodes` | `clearClusterNotOKAnnotation` (cluster ok) | 5 min cooldown between `CLUSTER RESET SOFT` operations |
 | `valkey.io/shard-imbalanced-since` | `reconcileShardStats` | `reconcileShardStats` (skew resolved) | 60 s grace before rebalance Job |
 
 ---

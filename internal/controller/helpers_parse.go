@@ -1,3 +1,18 @@
+// Copyright 2026 Gorilla-Ops contributors
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package controller
 
 import (
@@ -223,6 +238,8 @@ func parseReplicaAddrsForMaster(nodesRaw, masterNodeID string) (ips map[string]s
 
 // buildKnownAddrSets returns two sets — IPs and hostnames — of all nodes
 // currently known to the cluster from a CLUSTER NODES output.
+// Nodes with the "noaddr" flag are excluded: their IP may be stale (last
+// known before disconnect) and should not prevent orphan detection.
 func buildKnownAddrSets(nodesRaw string) (ips map[string]struct{}, hostnames map[string]struct{}) {
 	nodesRaw = stripVerbatimPrefix(nodesRaw)
 	ips = make(map[string]struct{})
@@ -233,7 +250,11 @@ func buildKnownAddrSets(nodesRaw string) (ips map[string]struct{}, hostnames map
 			continue
 		}
 		parts := strings.Fields(line)
-		if len(parts) < 2 {
+		if len(parts) < 3 {
+			continue
+		}
+		// parts[2] contains flags (e.g. "master", "slave,fail,noaddr").
+		if strings.Contains(parts[2], "noaddr") {
 			continue
 		}
 		addrRaw := parts[1]
