@@ -420,4 +420,4 @@ Production deployments emit JSON structured logs, compatible with GKE Cloud Logg
 
 Apache License 2.0 — see [LICENSE](LICENSE) for details.
 
-Copyright 2024 Gorilla-Ops contributors.
+Copyright 2024 MonkeyCorp Cloud contributors.

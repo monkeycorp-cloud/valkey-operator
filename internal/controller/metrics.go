@@ -1,4 +1,4 @@
-// Copyright 2026 Gorilla-Ops contributors
+// Copyright 2026 MonkeyCorp Cloud contributors
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
